@@ -13,7 +13,14 @@ app = FastAPI(title="ai-art-emotion", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","http://localhost:5173"],
+    # 개발 편의: 로컬 프론트 서버(포트 3000/5173)와 127.0.0.1 변형 허용.
+    # 배포 시에는 반드시 정확한 origin 목록으로 제한하세요.
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
