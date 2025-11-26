@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: draw_your_mind_db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=jaewoong     
+      - POSTGRES_PASSWORD=1234
+      - POSTGRES_DB=mind_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

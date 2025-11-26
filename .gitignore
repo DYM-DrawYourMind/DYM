@@ -2,3 +2,4 @@ weights/
 *.pt
 weights/
 *.pt
+yolov5/
