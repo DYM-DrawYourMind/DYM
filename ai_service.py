@@ -2,12 +2,17 @@ import torch
 import os
 import pathlib
 from pathlib import Path
-import openai
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # .env 로드 (API Key 불러오기)
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# Groq 클라이언트 설정
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("OPENAI_API_KEY")
+)
 
 # [Windows/Mac 경로 호환성]
 pathlib.PosixPath = pathlib.Path
@@ -90,9 +95,9 @@ def analyze_psychology(detection_summary: dict):
     """
 
     try:
-        # 2. ChatGPT API 호출 (최신 gpt-3.5-turbo 또는 gpt-4 사용)
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo", # 또는 "gpt-4"
+        # 2. Groq API 호출 (Llama3 모델 사용)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

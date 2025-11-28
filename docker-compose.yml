@@ -5,7 +5,7 @@ services:
     image: postgres:15
     container_name: draw_your_mind_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       - POSTGRES_USER=jaewoong     
       - POSTGRES_PASSWORD=1234

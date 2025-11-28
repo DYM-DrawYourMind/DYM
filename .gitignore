@@ -1,5 +1,26 @@
-weights/
-*.pt
+# YOLOv5 & Weights
 weights/
 *.pt
 yolov5/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Environment Variables
+.env
+
+# User Uploads (Images)
+static/images/
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
