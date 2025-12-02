@@ -11,7 +11,7 @@ load_dotenv()
 # Groq 클라이언트 설정
 client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
-    api_key=os.getenv("OPENAI_API_KEY")
+    api_key=os.getenv("Groq_API_KEY")
 )
 
 # [Windows/Mac 경로 호환성]
