@@ -7,6 +7,7 @@ import os
 import uuid
 import httpx # 카카오 API 통신용
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 # 우리가 만든 모듈들
 import db_models 
@@ -24,9 +25,33 @@ db_models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-UPLOAD_DIR = "static/images"
+# ==========================================
+# 🟢 CORS 설정 (프론트엔드 연결)
+# ==========================================
+origins = [
+    "http://localhost:3000",    # 리액트 로컬 주소
+    "http://127.0.0.1:3000",
+    "*"                         # (테스트용) 모든 곳 허용
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,      # 👈 위에서 정의한 주소들 허용
+    allow_credentials=True,
+    allow_methods=["*"],        # 모든 HTTP 메소드(GET, POST 등) 허용
+    allow_headers=["*"],        # 모든 헤더 허용
+)
+
+# [중요] 이미지 저장 경로 설정 (절대 경로 사용)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+UPLOAD_DIR = os.path.join(STATIC_DIR, "images")
+
+# 폴더가 없으면 생성
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# 정적 파일(이미지) 제공 설정
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/")
 def read_root():
@@ -83,8 +108,9 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
         
         nickname = properties.get("nickname")
         if not nickname:
-          nickname = kakao_account.get("profile", {}).get("nickname")
-          email = kakao_account.get("email")
+            nickname = kakao_account.get("profile", {}).get("nickname")
+        
+        email = kakao_account.get("email")
 
         # 3. DB에 사용자 저장 (이미 있으면 조회, 없으면 생성)
         user = db.query(db_models.User).filter(db_models.User.kakao_id == kakao_id).first()
@@ -103,14 +129,11 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
         else:
             print(f"👋 기존 회원 로그인: {nickname}")
 
-        # 프론트엔드 개발 전이므로, 일단 JSON으로 유저 ID 반환
-        # 나중에 프론트엔드 주소로 리다이렉트 시키면서 토큰을 넘겨줘야 함
-        return {
-            "status": "login_success",
-            "user_id": user.id,
-            "nickname": user.nickname,
-            "token": access_token # (실제 서비스에선 JWT를 직접 만들어 줘야 함)
-        }
+        # [핵심 변경] 로그인 성공 후 프론트엔드로 리다이렉트!
+        # URL 뒤에 user_id를 붙여서 보냅니다. 프론트에서 이걸 잡아서 저장해야 합니다.
+        return RedirectResponse(
+            url=f"http://localhost:3000?user_id={user.id}&token={access_token}"
+        )
 
 
 # ==========================================
@@ -134,6 +157,12 @@ async def analyze_drawing(
     detection_result = ai_service.detect_full_htp(file_path)
     analysis_text = ai_service.analyze_psychology(detection_result['summary'])
 
+    # ⭐ [로그 출력] 터미널에서 AI 분석 결과 확인하기
+    print("\n" + "="*50)
+    print("🤖 [Groq 심리 분석 결과]:")
+    print(analysis_text)
+    print("="*50 + "\n")
+
     # 3. DB 저장 (user_id가 있으면 연결해서 저장)
     new_drawing = db_models.Drawing(
         user_id=user_id, # 로그인한 유저 ID 저장!
@@ -152,12 +181,14 @@ async def analyze_drawing(
         "result": {
             "id": new_drawing.id,
             "user_id": new_drawing.user_id,
-            "analysis": new_drawing.analysis_text
+            "analysis": new_drawing.analysis_text,
+            "detection": new_drawing.detection_result, # 프론트에서 객체 정보도 필요할 수 있으니 반환
+            "image_url": new_drawing.image_url # [중요] 프론트에서 이미지 보여주기 위해 필요
         }
     }
 
 # ==========================================
-#  3. 조회 기능 (결과 페이지 & 마이페이지)
+# 🔵 3. 조회 기능 (결과 페이지 & 마이페이지)
 # ==========================================
 
 # 3-1. 특정 분석 결과 조회 (결과 공유/다시보기용)
