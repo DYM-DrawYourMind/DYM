@@ -427,3 +427,137 @@ def full_analysis_pipeline(image_path: str, confidence_threshold: float = CONFID
         "detection": detection_result,
         "psychology": psychology_result
     }
+
+
+# 6. [New] 단일 객체 탐지 함수
+def detect_single_object(image_path: str, subject: str, confidence_threshold: float = CONFIDENCE_THRESHOLD):
+    """
+    단일 주제(House, Tree, Person)에 대한 객체 탐지
+    """
+    subject = subject.lower()
+    model = models.get(subject)
+    
+    if not model:
+        print(f"❌ Invalid subject: {subject}")
+        return None
+
+    results = model(image_path)
+    df = results.pandas().xyxy[0]
+    
+    # 신뢰도 필터링
+    def strict_filter(row):
+        if row['class'] == 0:  # 전체 객체
+            return row['confidence'] >= max(0.75, confidence_threshold)
+        else:
+            return row['confidence'] >= confidence_threshold
+
+    df_filtered = df[df.apply(strict_filter, axis=1)]
+    
+    # 전체 객체 확인
+    has_whole_object = not df_filtered[df_filtered['class'] == 0].empty
+    if not has_whole_object:
+        print(f"⚠️ [{subject}] '전체(Whole)' 객체가 감지되지 않아 부속 부위 {len(df_filtered)}개를 무시합니다.")
+        df_filtered = df_filtered.iloc[0:0]
+
+    filtered_counts = df_filtered['name'].value_counts().to_dict()
+    
+    # 상세 정보
+    details = df_filtered.to_dict(orient="records")
+    for item in details:
+        item['subject_type'] = subject
+        
+    # NMS (단일 모델 내에서도 중복이 있을 수 있으므로 적용 - IoU 기반)
+    details.sort(key=lambda x: x['confidence'], reverse=True)
+
+    return {
+        "summary": {subject: filtered_counts}, # 호환성을 위해 구조 유지
+        "filtered_summary": {subject: filtered_counts},
+        "details": details,
+        "result_image_url": None
+    }
+
+
+# 7. [New] 단일 객체 심리 분석 함수
+def analyze_single_psychology(filtered_summary: dict, subject: str):
+    """
+    단일 주제에 대한 심리 분석
+    """
+    subject_korean = {"house": "집", "tree": "나무", "person": "사람"}.get(subject.lower(), subject)
+    
+    system_prompt = f"""
+당신은 {subject_korean}({subject}) 그림 심리 분석 전문가입니다.
+분석 결과를 반드시 아래 마크다운 형식으로만 출력하세요.
+
+# 전반적인 심리 상태
+(2-3문장으로 요약)
+
+## 😊 긍정적 특성
+### 특성명 [강도: 85]
+설명 (1-2문장)
+
+## 😔 주의가 필요한 부분
+### 특성명 [강도: 60]
+설명 (1-2문장)
+
+## 📌 세부 관찰
+- 관찰 내용 1
+- 관찰 내용 2
+
+## 💡 심리적 조언
+- 조언 1
+
+**규칙:**
+- 강도(intensity)는 0-100 사이의 정수
+- {subject_korean}의 특징에 집중하여 분석하세요.
+- 탐지된 객체가 없으면 "그림이 단순하거나 명확하지 않아..." 형태로 일반적인 해석 제공
+"""
+
+    subject_info = filtered_summary.get(subject.lower(), {})
+    is_detected = bool(subject_info)
+    
+    user_prompt = f"""
+[탐지된 {subject_korean} 객체 정보]
+- {subject_korean}: {"탐지됨 " + str(subject_info) if is_detected else "탐지 안됨"}
+
+위 정보를 바탕으로 심리 분석을 수행하세요.
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.6,
+            max_tokens=1500
+        )
+        
+        markdown_result = response.choices[0].message.content
+        parsed_data = parse_markdown_analysis(markdown_result)
+        return parsed_data
+
+    except Exception as e:
+        print(f"❌ Groq API Error: {e}")
+        return {
+            "markdown": "분석 실패",
+            "overall_summary": "오류 발생",
+            "positive_traits": [],
+            "negative_traits": [],
+            "neutral_observations": [],
+            "recommendations": []
+        }
+
+
+# 8. [New] 단일 분석 파이프라인
+def single_analysis_pipeline(image_path: str, subject: str, confidence_threshold: float = CONFIDENCE_THRESHOLD):
+    detection_result = detect_single_object(image_path, subject, confidence_threshold)
+    if not detection_result:
+        raise ValueError("Invalid subject or model error")
+        
+    psychology_result = analyze_single_psychology(detection_result["filtered_summary"], subject)
+    
+    return {
+        "detection": detection_result,
+        "psychology": psychology_result
+    }

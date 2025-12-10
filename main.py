@@ -198,14 +198,6 @@ async def analyze_drawing(
                 "id": new_drawing.id,
                 "user_id": new_drawing.user_id,
                 "image_url": new_drawing.image_url,
-                "result_image_url": detection_result.get("result_image_url"), # [추가] 박스 그려진 이미지
-                
-                # 탐지 결과 (필터링된 요약 + 상세 정보)
-                "detection": {
-                    "summary": detection_result["filtered_summary"],
-                    "details": detection_result["details"],
-                    "confidence_threshold": CONFIDENCE_THRESHOLD
-                },
                 
                 # 심리 분석 결과 (마크다운 + 파싱된 구조)
                 "psychology": {
@@ -225,6 +217,67 @@ async def analyze_drawing(
             status_code=500, 
             detail=f"분석 중 오류가 발생했습니다: {str(e)}"
         )
+
+
+# ==========================================
+# 🆕 2-2. 단일 그림 분석 (House, Tree, Person 중 택1)
+# ==========================================
+@app.post("/analyze/single")
+async def analyze_single_drawing(
+    subject: str, # "house", "tree", "person"
+    file: UploadFile = File(...),
+    user_id: int = None,
+    db: Session = Depends(get_db)
+):
+    if subject.lower() not in ["house", "tree", "person"]:
+        raise HTTPException(status_code=400, detail="Invalid subject. Choose from 'house', 'tree', 'person'.")
+
+    try:
+        # 1. 파일 저장
+        extension = file.filename.split(".")[-1]
+        filename = f"{uuid.uuid4()}.{extension}"
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # 2. AI 단일 분석 파이프라인 실행
+        analysis_result = ai_service.single_analysis_pipeline(
+            image_path=file_path,
+            subject=subject,
+            confidence_threshold=CONFIDENCE_THRESHOLD
+        )
+        
+        detection_result = analysis_result["detection"]
+        psychology_result = analysis_result["psychology"]
+        
+        # 3. DB 저장
+        new_drawing = db_models.Drawing(
+            user_id=user_id,
+            drawing_type=subject.upper(), # HOUSE, TREE, PERSON
+            image_url=f"/static/images/{filename}",
+            detection_result=detection_result["filtered_summary"],
+            analysis_text=psychology_result["markdown"]
+        )
+        
+        db.add(new_drawing)
+        db.commit()
+        db.refresh(new_drawing)
+        
+        return {
+            "status": "success",
+            "result": {
+                "id": new_drawing.id,
+                "user_id": new_drawing.user_id,
+                "subject": subject,
+                "image_url": new_drawing.image_url,
+                "psychology": psychology_result
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Error in analyze_single_drawing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==========================================
