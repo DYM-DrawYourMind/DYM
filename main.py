@@ -8,6 +8,7 @@ import uuid
 import httpx # 카카오 API 통신용
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+import json
 
 # 우리가 만든 모듈들
 import db_models 
@@ -19,6 +20,9 @@ load_dotenv()
 KAKAO_CLIENT_ID = os.getenv("KAKAO_CLIENT_ID")
 # 카카오 개발자센터에 등록한 주소와 100% 일치해야 함
 KAKAO_REDIRECT_URI = "http://127.0.0.1:8000/auth/kakao/callback"
+
+# 신뢰도 임계값 설정 (환경변수로 설정 가능)
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.75"))
 
 # DB 테이블 생성
 db_models.Base.metadata.create_all(bind=engine)
@@ -137,7 +141,7 @@ async def kakao_callback(code: str, db: Session = Depends(get_db)):
 
 
 # ==========================================
-# 🟢 2. 그림 분석 (로그인 유저 정보 저장 추가)
+# 🟢 2. 그림 분석 (개선된 버전)
 # ==========================================
 @app.post("/analyze")
 async def analyze_drawing(
@@ -145,47 +149,83 @@ async def analyze_drawing(
     user_id: int = None, # (선택) 로그인했다면 유저 ID를 같이 보냄
     db: Session = Depends(get_db)
 ):
-    # 1. 파일 저장
-    extension = file.filename.split(".")[-1]
-    filename = f"{uuid.uuid4()}.{extension}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    # 2. AI 분석
-    detection_result = ai_service.detect_full_htp(file_path)
-    analysis_text = ai_service.analyze_psychology(detection_result['summary'])
+    """
+    그림 업로드 → YOLO 탐지 (신뢰도 필터링) → Groq 심리 분석 (마크다운)
+    """
+    try:
+        # 1. 파일 저장
+        extension = file.filename.split(".")[-1]
+        filename = f"{uuid.uuid4()}.{extension}"
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # 2. AI 전체 파이프라인 실행 (신뢰도 필터링 포함)
+        analysis_result = ai_service.full_analysis_pipeline(
+            image_path=file_path,
+            confidence_threshold=CONFIDENCE_THRESHOLD
+        )
+        
+        detection_result = analysis_result["detection"]
+        psychology_result = analysis_result["psychology"]
 
-    # ⭐ [로그 출력] 터미널에서 AI 분석 결과 확인하기
-    print("\n" + "="*50)
-    print("🤖 [Groq 심리 분석 결과]:")
-    print(analysis_text)
-    print("="*50 + "\n")
+        # ⭐ [로그 출력] 터미널에서 AI 분석 결과 확인하기
+        print("\n" + "="*60)
+        print("🔍 [객체 탐지 결과 - 필터링됨]:")
+        print(json.dumps(detection_result["filtered_summary"], indent=2, ensure_ascii=False))
+        print("\n🤖 [Groq 심리 분석 결과 - 마크다운]:")
+        print(psychology_result["markdown"])
+        print("="*60 + "\n")
 
-    # 3. DB 저장 (user_id가 있으면 연결해서 저장)
-    new_drawing = db_models.Drawing(
-        user_id=user_id, # 로그인한 유저 ID 저장!
-        drawing_type="HTP_FULL", 
-        image_url=f"/static/images/{filename}",
-        detection_result=detection_result['summary'],
-        analysis_text=analysis_text
-    )
-    
-    db.add(new_drawing)
-    db.commit()
-    db.refresh(new_drawing)
+        # 3. DB 저장
+        new_drawing = db_models.Drawing(
+            user_id=user_id,
+            drawing_type="HTP_FULL", 
+            image_url=f"/static/images/{filename}",
+            detection_result=detection_result["filtered_summary"],  # 필터링된 결과만 저장
+            analysis_text=psychology_result["markdown"]  # 마크다운 원본 저장
+        )
+        
+        db.add(new_drawing)
+        db.commit()
+        db.refresh(new_drawing)
 
-    return {
-        "status": "success",
-        "result": {
-            "id": new_drawing.id,
-            "user_id": new_drawing.user_id,
-            "analysis": new_drawing.analysis_text,
-            "detection": new_drawing.detection_result, # 프론트에서 객체 정보도 필요할 수 있으니 반환
-            "image_url": new_drawing.image_url # [중요] 프론트에서 이미지 보여주기 위해 필요
+        # 4. 응답 반환
+        return {
+            "status": "success",
+            "result": {
+                "id": new_drawing.id,
+                "user_id": new_drawing.user_id,
+                "image_url": new_drawing.image_url,
+                "result_image_url": detection_result.get("result_image_url"), # [추가] 박스 그려진 이미지
+                
+                # 탐지 결과 (필터링된 요약 + 상세 정보)
+                "detection": {
+                    "summary": detection_result["filtered_summary"],
+                    "details": detection_result["details"],
+                    "confidence_threshold": CONFIDENCE_THRESHOLD
+                },
+                
+                # 심리 분석 결과 (마크다운 + 파싱된 구조)
+                "psychology": {
+                    "markdown": psychology_result["markdown"],  # 원본 마크다운
+                    "overall_summary": psychology_result["overall_summary"],
+                    "positive_traits": psychology_result["positive_traits"],
+                    "negative_traits": psychology_result["negative_traits"],
+                    "neutral_observations": psychology_result["neutral_observations"],
+                    "recommendations": psychology_result["recommendations"]
+                }
+            }
         }
-    }
+    
+    except Exception as e:
+        print(f"❌ Error in analyze_drawing: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"분석 중 오류가 발생했습니다: {str(e)}"
+        )
+
 
 # ==========================================
 # 🔵 3. 조회 기능 (결과 페이지 & 마이페이지)
@@ -198,15 +238,30 @@ def get_drawing_result(drawing_id: int, db: Session = Depends(get_db)):
     
     if not drawing:
         raise HTTPException(status_code=404, detail="결과를 찾을 수 없습니다.")
+    
+    # analysis_text가 마크다운이므로 파싱해서 반환
+    try:
+        parsed_psychology = ai_service.parse_markdown_analysis(drawing.analysis_text)
+    except:
+        # 파싱 실패 시 원본만 반환
+        parsed_psychology = {
+            "markdown": drawing.analysis_text,
+            "overall_summary": "",
+            "positive_traits": [],
+            "negative_traits": [],
+            "neutral_observations": [],
+            "recommendations": []
+        }
         
     return {
         "id": drawing.id,
         "user_id": drawing.user_id,
         "image_url": drawing.image_url,
         "detection": drawing.detection_result,
-        "analysis": drawing.analysis_text,
+        "psychology": parsed_psychology,
         "created_at": drawing.created_at
     }
+
 
 # 3-2. 특정 유저의 그림 목록 조회 (마이페이지용)
 @app.get("/users/{user_id}/drawings")
@@ -224,4 +279,16 @@ def get_user_drawings(user_id: int, db: Session = Depends(get_db)):
             }
             for d in drawings
         ]
+    }
+
+
+# ==========================================
+# 🆕 4. 신뢰도 임계값 조정 API (선택적)
+# ==========================================
+@app.get("/settings/confidence-threshold")
+def get_confidence_threshold():
+    """현재 설정된 신뢰도 임계값 조회"""
+    return {
+        "confidence_threshold": CONFIDENCE_THRESHOLD,
+        "description": "0.0 ~ 1.0 사이의 값. 높을수록 엄격한 필터링"
     }
