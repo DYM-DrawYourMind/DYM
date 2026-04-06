@@ -35,7 +35,7 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",    # 리액트 로컬 주소
     "http://127.0.0.1:3000",
-    "*"                         # (테스트용) 모든 곳 허용
+    # "*"  <-- 보안 및 에러 방지를 위해 주석 처리하거나 삭제했습니다.
 ]
 
 app.add_middleware(
@@ -191,31 +191,28 @@ async def analyze_drawing(
         db.commit()
         db.refresh(new_drawing)
 
-        # 4. 응답 반환
+        # 4. 응답 반환 (수정됨: 'result' 껍데기를 제거하고 바로 데이터를 반환)
         return {
-            "status": "success",
-            "result": {
-                "id": new_drawing.id,
-                "user_id": new_drawing.user_id,
-                "image_url": new_drawing.image_url,
-                "result_image_url": detection_result.get("result_image_url"), # [추가] 박스 그려진 이미지
-                
-                # 탐지 결과 (필터링된 요약 + 상세 정보)
-                "detection": {
-                    "summary": detection_result["filtered_summary"],
-                    "details": detection_result["details"],
-                    "confidence_threshold": CONFIDENCE_THRESHOLD
-                },
-                
-                # 심리 분석 결과 (마크다운 + 파싱된 구조)
-                "psychology": {
-                    "markdown": psychology_result["markdown"],  # 원본 마크다운
-                    "overall_summary": psychology_result["overall_summary"],
-                    "positive_traits": psychology_result["positive_traits"],
-                    "negative_traits": psychology_result["negative_traits"],
-                    "neutral_observations": psychology_result["neutral_observations"],
-                    "recommendations": psychology_result["recommendations"]
-                }
+            "id": new_drawing.id,
+            "user_id": new_drawing.user_id,
+            "image_url": new_drawing.image_url,
+            "result_image_url": detection_result.get("result_image_url"), 
+            
+            # 탐지 결과 (필터링된 요약 + 상세 정보)
+            "detection": {
+                "summary": detection_result["filtered_summary"],
+                "details": detection_result["details"],
+                "confidence_threshold": CONFIDENCE_THRESHOLD
+            },
+            
+            # 심리 분석 결과 (마크다운 + 파싱된 구조)
+            "psychology": {
+                "markdown": psychology_result["markdown"],  # 원본 마크다운
+                "overall_summary": psychology_result["overall_summary"],
+                "positive_traits": psychology_result["positive_traits"],
+                "negative_traits": psychology_result["negative_traits"],
+                "neutral_observations": psychology_result["neutral_observations"],
+                "recommendations": psychology_result["recommendations"]
             }
         }
     
